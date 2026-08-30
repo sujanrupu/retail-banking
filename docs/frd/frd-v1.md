@@ -1,28 +1,93 @@
-# Retail Banking API Platform Functional Requirement Document
-## Functional Requirements
-* The application must enable users to manually add daily expenses with predefined categories and custom categories
-* The application must allow users to create an account and log in to access the application securely
-* The application must display a dashboard with analytics and insights into user spending, including key metrics such as total expenses, income, and budget balance
-* The application must provide users with the ability to view their expense history, filtered by time and category, and allow for transaction searches
-* The application must provide simple financial insights based on user spending data, including trends, category-wise expense distribution, and budgeting recommendations
-* The application must allow users to set and manage their personal budget, tracking progress and optionally receiving alerts
-## API Requirements
-* User registration endpoint with username, password, and other relevant details
-* User login endpoint with username and password for secure authentication
-* Expense tracking endpoint to add, update, and delete expenses
-* Dashboard analytics endpoint to retrieve user spending data and key metrics
-* Expense history endpoint to retrieve user expense history with filtering and search functionality
-* Financial insights endpoint to retrieve simple financial insights based on user spending data
-* Budget management endpoint to set, update, and retrieve user budget data
-## Database Requirements
-* User entity with username, password, and other relevant details
-* Expense entity with expense amount, category, date, and other relevant details
-* Budget entity with budget amount, start date, end date, and other relevant details
-* Relationship between User and Expense entities to store user expenses
-* Relationship between User and Budget entities to store user budgets
-## Non-Functional Requirements
-* The application must ensure secure user data storage and authentication
-* The application must store user data locally or in a secure cloud-based storage solution
-* The application must provide an intuitive and user-friendly interface
-* The application must be scalable to handle a large number of users and transactions
-* The application must ensure high availability and uptime to provide 24/7 access to users
+# SDLC APEX Functional Requirement Document — E-Commerce Order Management & Delivery Platform
+
+## 1. System Overview
+This document specifies the functional and non-functional requirements for E-Commerce Order Management & Delivery Platform.
+
+## 2. Functional Requirements
+[
+  "FR-1: Customer Registration & Profile Management \u2014 The system shall allow unauthenticated users to register by submitting required personal and contact details (email, password, first name, last name, phone). The system will validate all mandatory fields, enforce strong password policies (min 12 chars, mixed case, digits, special chars), and store credentials using bcrypt with a cost factor of 12. Upon successful registration, the system will generate a unique customer ID, send a verification email via the notification service, and return a 201 Created with the customer\u2019s public profile (excluding PII). Duplicate email registration attempts must return HTTP 409 Conflict.",
+  "FR-2: Secure Customer Authentication & Session Management \u2014 The system shall authenticate customers using OAuth 2.0 with JWT access tokens (expires in 15 minutes) and refresh tokens (expires in 30 days). The /auth/login endpoint will accept email and password, validate credentials against the hashed store, and issue tokens. All subsequent authenticated requests must include the JWT in the Authorization header (Bearer scheme). The system will enforce multi-factor authentication (MFA) for any order exceeding $1,000 or any account flagged for suspicious activity. Failed login attempts will trigger progressive backoff (max 5 attempts \u2192 15-minute lockout).",
+  "FR-3: Product Catalog Search & Filtering \u2014 The system shall provide a full-text search endpoint that accepts query strings, category filters, price range (min/max), availability status, and pagination (limit/offset). Search will be powered by Elasticsearch with a relevance-scored response (< 2s P95 latency under 100 RPS). The system will return paginated results including product ID, name, price, thumbnail URL, seller ID, category path, and availability status. Invalid queries (e.g., negative price) must return HTTP 400 Bad Request with a user-friendly message.",
+  "FR-4: Shopping Cart & Order Placement Workflow \u2014 The system shall allow authenticated customers to manage a cart via /cart/items (add, update quantity, remove). Each cart item must validate real-time inventory availability (via inventory service) and reject additions when quantity exceeds available stock (HTTP 409 Conflict). Upon checkout initiation, the system will create an order entity in status 'PENDING_PAYMENT', reserve inventory atomically (via inventory reservation service), and return a unique order ID. The cart will be cleared only after successful payment confirmation.",
+  "FR-5: Payment Integration & Confirmation Engine \u2014 The system shall integrate with Stripe, PayPal, and Adyen payment gateways via a unified /payments/charge endpoint. The endpoint will accept order ID, payment method token, and amount, then invoke the selected gateway synchronously. On success (HTTP 200), the order status transitions to 'CONFIRMED', inventory is finalized, and notifications are queued. On failure (HTTP 402 Payment Required), the order remains 'PENDING_PAYMENT', inventory reservation is released, and a retry window of 10 minutes is offered. Timeout scenarios (30s) will trigger async reconciliation via webhook.",
+  "FR-6: Order Cancellation & Refund Processing \u2014 The system shall allow customers to cancel orders via /orders/{orderId}/cancel only when the order status is 'PENDING_PAYMENT' or 'CONFIRMED' and shipment status is 'NOT_SHIPPED'. On valid cancellation, the system will transition the order to 'CANCELLED', initiate a refund via the payment gateway (if paid), and queue notifications. Refund status will be tracked asynchronously; completion updates the order. Failed refunds (HTTP 402) will log an error and notify admins; the order remains 'CANCELLED_PENDING_REFUND' until resolved.",
+  "FR-7: Return Request & Management Workflow \u2014 The system shall allow customers to request returns via /returns with order line item IDs, return reason, and images. The request will be validated for eligibility (delivered status, within configurable return window e.g., 30 days), then transition to 'REQUESTED'. Sellers/admins can approve/reject via /returns/{returnId}/approve or /reject. On approval, the system initiates a refund, transitions status to 'APPROVED', and schedules pickup via the logistics provider. Rejected returns include a reason and are not refundable.",
+  "FR-8: Inventory Reservation & Release Service \u2014 The system shall provide atomic inventory reservation via /inventory/reservations with product ID, quantity, and order ID. The service will decrement available stock, create a reservation record, and return a reservation ID. On payment failure or timeout, the reservation must be released within 5 seconds via /inventory/reservations/{id}/release, restoring available stock. The service will enforce a reservation TTL of 15 minutes; expired reservations are auto-released by a background job every 60 seconds.",
+  "FR-9: Delivery Partner Shipment Management \u2014 The system shall expose /shipments for delivery partners to view assigned shipments (status 'CONFIRMED' or 'CANCELLED_PENDING_REFUND'), update status to 'PICKED_UP', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', or 'DELIVERY_FAILED'. Each update will trigger an async event to update the order status and notify the customer. Delivery partners must authenticate via API keys (rotated every 90 days) and include a signature header (HMAC-SHA256). Invalid status transitions (e.g., 'DELIVERED' \u2192 'IN_TRANSIT') must return HTTP 409 Conflict.",
+  "FR-10: Audit Log Service \u2014 The system shall generate immutable audit logs for all critical events (login, order creation, payment, cancellation, return, inventory change, admin action) via a centralized /audit/events endpoint. Each log will include event_id (UUIDv4), user_id (or system), event_type (enum), timestamp (ISO8601 UTC), result (enum: success/failure), source_app (e.g., 'order-service'), correlation_id (for tracing), and metadata (JSON). Logs will be stored in a tamper-evident append-only store (WORM S3 bucket) with 7-year retention. Admins can query logs via /audit/events with pagination and filters (user_id, date range, event_type)."
+]
+
+## 3. API Requirements
+[
+  "POST /auth/register \u2014 Register a new customer. Auth: none. Request: {email, password, firstName, lastName, phone}. Response: {customerId, email, firstName, lastName, createdAt}. Error: 400 (invalid input), 409 (duplicate email).",
+  "POST /auth/login \u2014 Authenticate and issue JWT tokens. Auth: none. Request: {email, password}. Response: {accessToken, refreshToken, expiresIn}. Error: 401 (invalid credentials), 403 (MFA required).",
+  "POST /auth/refresh \u2014 Refresh JWT access token. Auth: refresh token (Bearer). Request: {refreshToken}. Response: {accessToken, expiresIn}. Error: 401 (invalid/expired token).",
+  "GET /products/search \u2014 Full-text search with filters. Auth: optional (public). Query params: q, category, minPrice, maxPrice, inStock, limit, offset. Response: {results: [{productId, name, price, thumbnailUrl, sellerId, categoryPath, inStock}], total, limit, offset}. Error: 400 (invalid params).",
+  "GET /products/{productId} \u2014 Retrieve product details. Auth: none. Response: {productId, name, description, images, price, availableQuantity, sellerId, category, attributes}. Error: 404 (not found).",
+  "POST /cart/items \u2014 Add/update/remove cart items. Auth: customer JWT. Request: {productId, quantity} for add/update; {productId} for remove. Response: {cartId, items: [{productId, name, price, quantity, subtotal}], total}. Error: 400 (invalid quantity), 409 (insufficient inventory).",
+  "POST /orders \u2014 Create an order from cart. Auth: customer JWT. Request: {cartId}. Response: {orderId, status, items, total, createdAt}. Error: 400 (empty cart), 409 (inventory mismatch).",
+  "POST /payments/charge \u2014 Initiate payment for an order. Auth: customer JWT. Request: {orderId, paymentMethodToken, amount}. Response: {paymentId, status, transactionId}. Error: 402 (payment failed), 502 (gateway timeout).",
+  "POST /orders/{orderId}/cancel \u2014 Cancel an eligible order. Auth: customer JWT. Response: {orderId, newStatus, cancelledAt}. Error: 403 (order not cancellable), 404 (not found).",
+  "POST /returns \u2014 Request a return. Auth: customer JWT. Request: {orderId, lineItemIds, reason, images}. Response: {returnId, status, requestedAt}. Error: 400 (invalid reason), 409 (not eligible).",
+  "PATCH /returns/{returnId}/approve \u2014 Approve a return (seller/admin). Auth: seller/admin JWT. Request: {notes}. Response: {returnId, status, approvedAt}. Error: 403 (unauthorized), 409 (invalid status).",
+  "POST /inventory/reservations \u2014 Reserve inventory for an order. Auth: system service (internal). Request: {productId, quantity, orderId}. Response: {reservationId, reservedAt}. Error: 409 (insufficient stock), 400 (invalid quantity).",
+  "POST /inventory/reservations/{id}/release \u2014 Release a reservation. Auth: system service. Response: {success: true}. Error: 404 (not found), 409 (already released).",
+  "GET /shipments \u2014 List assigned shipments for delivery partner. Auth: delivery partner API key. Query params: status, limit, offset. Response: {shipments: [{shipmentId, orderId, status, address, items}]}. Error: 401 (invalid key).",
+  "PATCH /shipments/{shipmentId} \u2014 Update shipment status. Auth: delivery partner API key. Request: {status}. Response: {shipmentId, newStatus, updatedAt}. Error: 400 (invalid status), 409 (illegal transition).",
+  "POST /audit/events \u2014 Log an audit event. Auth: any service JWT. Request: {eventType, userId, result, metadata}. Response: {eventId, timestamp}. Error: 400 (invalid eventType).",
+  "GET /audit/events \u2014 Query audit logs. Auth: admin JWT. Query params: userId, eventType, startDate, endDate, limit, offset. Response: {events: [{eventId, userId, eventType, timestamp, result, sourceApp, correlationId}], total}. Error: 403 (unauthorized)."
+]
+
+## 4. Data Model
+[
+  "customers \u2014 Stores customer profiles. Columns: customer_id (UUIDv4, PK), email (varchar(255), unique, not null), password_hash (varchar(255), not null), first_name (varchar(100), not null), last_name (varchar(100), not null), phone (varchar(20)), is_verified (boolean, default false), mfa_enabled (boolean, default false), created_at (timestamptz, not null), updated_at (timestamptz, not null). Indexes: email (unique), created_at.",
+  "sellers \u2014 Stores seller profiles. Columns: seller_id (UUIDv4, PK), user_id (UUIDv4, FK customers.customer_id), business_name (varchar(255), not null), tax_id (varchar(50)), address (jsonb, not null), is_active (boolean, default true), created_at (timestamptz, not null), updated_at (timestamptz, not null). Indexes: user_id (unique), business_name.",
+  "products \u2014 Core product catalog. Columns: product_id (UUIDv4, PK), seller_id (UUIDv4, FK sellers.seller_id), name (varchar(255), not null), description (text), price (numeric(10,2), not null), category_id (UUIDv4, FK categories.category_id), images (jsonb), attributes (jsonb), is_active (boolean, default true), created_at (timestamptz, not null), updated_at (timestamptz, not null). Indexes: seller_id, category_id, price, created_at.",
+  "categories \u2014 Product taxonomy. Columns: category_id (UUIDv4, PK), name (varchar(100), not null), slug (varchar(100), unique, not null), parent_id (UUIDv4, FK categories.category_id, nullable), path (varchar(512), not null). Indexes: slug (unique), parent_id.",
+  "inventory \u2014 Tracks stock levels. Columns: inventory_id (UUIDv4, PK), product_id (UUIDv4, FK products.product_id), available_quantity (integer, not null, default 0), reserved_quantity (integer, not null, default 0), total_quantity (integer, not null), last_updated (timestamptz, not null). Indexes: product_id (unique). Constraints: available_quantity >= 0, reserved_quantity >= 0.",
+  "carts \u2014 Customer shopping carts. Columns: cart_id (UUIDv4, PK), customer_id (UUIDv4, FK customers.customer_id), created_at (timestamptz, not null), updated_at (timestamptz, not null). Indexes: customer_id (unique).",
+  "cart_items \u2014 Cart line items. Columns: cart_item_id (UUIDv4, PK), cart_id (UUIDv4, FK carts.cart_id), product_id (UUIDv4, FK products.product_id), quantity (integer, not null), price_at_add (numeric(10,2), not null), created_at (timestamptz, not null). Indexes: cart_id, product_id.",
+  "orders \u2014 Order headers. Columns: order_id (UUIDv4, PK), customer_id (UUIDv4, FK customers.customer_id), status (varchar(50), not null), total_amount (numeric(12,2), not null), payment_status (varchar(20), not null), shipment_status (varchar(50), not null), created_at (timestamptz, not null), updated_at (timestamptz, not null). Indexes: customer_id, status, created_at. Statuses: PENDING_PAYMENT, CONFIRMED, CANCELLED, CANCELLED_PENDING_REFUND, RETURN_REQUESTED, RETURN_APPROVED, RETURN_COMPLETED.",
+  "order_items \u2014 Order line items. Columns: order_item_id (UUIDv4, PK), order_id (UUIDv4, FK orders.order_id), product_id (UUIDv4, FK products.product_id), quantity (integer, not null), unit_price (numeric(10,2), not null), seller_id (UUIDv4, FK sellers.seller_id), created_at (timestamptz, not null). Indexes: order_id, product_id.",
+  "payments \u2014 Payment records. Columns: payment_id (UUIDv4, PK), order_id (UUIDv4, FK orders.order_id), gateway (varchar(50), not null), transaction_id (varchar(255)), amount (numeric(12,2), not null), status (varchar(20), not null), failure_reason (text), created_at (timestamptz, not null), updated_at (timestamptz, not null). Indexes: order_id, transaction_id (unique). Statuses: initiated, succeeded, failed, timed_out.",
+  "returns \u2014 Return requests. Columns: return_id (UUIDv4, PK), order_id (UUIDv4, FK orders.order_id), customer_id (UUIDv4, FK customers.customer_id), status (varchar(50), not null), reason (text), images (jsonb), created_at (timestamptz, not null), updated_at (timestamptz, not null). Indexes: order_id, customer_id. Statuses: REQUESTED, UNDER_REVIEW, APPROVED, REJECTED, PRODUCT_RECEIVED, REFUND_INITIATED, REFUND_COMPLETED.",
+  "reservations \u2014 Inventory reservations. Columns: reservation_id (UUIDv4, PK), product_id (UUIDv4, FK products.product_id), order_id (UUIDv4, FK orders.order_id), quantity (integer, not null), reserved_at (timestamptz, not null), expires_at (timestamptz, not null), status (varchar(20), not null). Indexes: order_id, product_id. Statuses: active, released, expired.",
+  "shipments \u2014 Delivery tracking. Columns: shipment_id (UUIDv4, PK), order_id (UUIDv4, FK orders.order_id), delivery_partner_id (varchar(100), not null), tracking_number (varchar(255)), status (varchar(50), not null), address (jsonb, not null), estimated_delivery (timestamptz), actual_pickup (timestamptz), actual_delivery (timestamptz), notes (text), created_at (timestamptz, not null), updated_at (timestamptz, not null). Indexes: order_id (unique), tracking_number (unique), delivery_partner_id.",
+  "audit_logs \u2014 Immutable audit trail. Columns: event_id (UUIDv4, PK), user_id (UUIDv4, nullable), event_type (varchar(100), not null), timestamp (timestamptz, not null), result (varchar(20), not null), source_app (varchar(50), not null), correlation_id (varchar(255), not null), metadata (jsonb, not null). Indexes: timestamp, user_id, event_type, correlation_id."
+]
+
+## 5. Non-Functional Requirements
+[
+  "Performance: Product search P95 latency \u2264 2s under 100 RPS; product detail page P95 \u2264 1s; order placement flow (cart\u2192payment\u2192confirmation) P95 \u2264 5s including external calls.",
+  "Throughput: System must sustain 500 concurrent users and scale to 10,000 RPS during peak (e.g., Black Friday) with horizontal pod autoscaling (CPU > 70% \u2192 +1 pod, max 20 pods per service).",
+  "Availability: Target 99.9% monthly uptime (30m downtime/month), excluding scheduled maintenance windows (max 4h/month, announced 48h prior).",
+  "Reliability: Payment and order operations must guarantee exactly-once semantics; idempotency keys required for /payments/charge and /orders. No partial order creation allowed.",
+  "Maintainability: All services must expose /health and /metrics endpoints (Prometheus). CI/CD pipeline enforces semantic versioning, automated testing (unit 80% coverage, integration 100%), and canary deployments (5% traffic for 30m).",
+  "Usability: Frontend must render within 3s on 4G; error messages must be user-friendly and localized (English, Spanish, French). Mobile-first responsive design.",
+  "Compliance: Store PII under GDPR/CCPA; support right-to-erasure via soft delete with 30-day retention before hard delete. Encrypt all audit logs with AES-256 and store in WORM storage.",
+  "Data Growth: Assume 1M customers, 5M orders/year. Retain order data for 7 years; archive cold data to S3 Glacier after 1 year. Daily backups with 30-day retention in warm storage."
+]
+
+## 6. Security Requirements
+[
+  "AuthN: OAuth 2.0 with JWT (RS256) for access tokens (15m expiry), refresh tokens (30d expiry). MFA enforced for high-value orders (>$1,000) and suspicious logins (geovelocity > 500km/h).",
+  "AuthZ: Role-based access control (RBAC) enforced via JWT claims (roles: customer, seller, admin, delivery_partner). Data isolation: customers/sellers see only their own records; admins see all. Row-level security (RLS) on all queries.",
+  "Encryption: Data at rest: AES-256 for PII (email, phone, address), customer passwords hashed with bcrypt (cost=12). Data in transit: TLS 1.3 for all external and internal traffic. Secrets managed via AWS Secrets Manager with 90-day rotation.",
+  "Input Validation: All API inputs validated via JSON Schema; sanitize HTML in product descriptions. Rate limiting: 100 req/min per IP for /auth/login; 500 req/min for search. Block known malicious IPs via WAF.",
+  "Audit Logging: All auth events, order/payment changes, and admin actions logged with correlation IDs. Logs immutable and stored in WORM S3 with 7-year retention. Alert on suspicious patterns (e.g., 10 failed logins in 1m).",
+  "Secrets Management: API keys for external integrations (payment, logistics, notifications) stored in Secrets Manager, injected as env vars at runtime. Never logged or exposed in responses.",
+  "Compliance: PCI-DSS Level 1 for payment data; SOC 2 Type II for platform operations. Regular penetration testing (OWASP Top 10) and dependency scanning (Trivy, Snyk)."
+]
+
+## 7. Integration Requirements
+[
+  "Payment Gateway \u2014 Stripe, PayPal, Adyen. Direction: platform \u2192 gateway. API: REST/GraphQL. Failure handling: retry with exponential backoff (max 3 attempts), then queue for async reconciliation. Timeout: 30s. If all gateways fail, order remains PENDING_PAYMENT and customer notified via email.",
+  "Delivery/Logistics Provider \u2014 Generic API (e.g., FedEx, DHL, UPS). Direction: platform \u2192 provider. API: REST. Failure handling: retry 2x, then mark shipment as FAILED and notify admin. Required fields: address, weight, dimensions. Webhooks for status updates (signed payloads).",
+  "Email Notification Service \u2014 AWS SES or SendGrid. Direction: platform \u2192 service. API: REST. Failure handling: retry 3x, then log error and notify admin. Template IDs for order confirmations, cancellations, refunds, returns. Rate limit: 50 emails/sec.",
+  "SMS Notification Service \u2014 Twilio or AWS SNS. Direction: platform \u2192 service. API: REST. Failure handling: retry 2x, then log error. Template variables for OTP and order updates. Rate limit: 20 SMS/sec.",
+  "Push Notification Service \u2014 Firebase Cloud Messaging (FCM). Direction: platform \u2192 service. API: REST. Failure handling: retry 2x, then log error. Payload includes orderId and deep link. Rate limit: 100 push/sec.",
+  "Authentication/Identity Provider \u2014 Auth0 or AWS Cognito. Direction: platform \u2194 provider. API: OAuth 2.0 / OpenID Connect. Failure handling: fallback to local auth if provider unavailable (max 5m). Required scopes: openid, email, profile.",
+  "Inventory Service \u2014 Internal microservice. Direction: order-service \u2194 inventory-service. API: gRPC. Failure handling: circuit breaker (50% failure threshold \u2192 open for 30s), then fallback to cached inventory (stale \u2264 5s).",
+  "Audit Log Sink \u2014 AWS CloudWatch Logs or S3. Direction: all services \u2192 audit-service. API: HTTPS PUT. Failure handling: retry 5x with jitter, then write to local buffer and flush on recovery.",
+  "None identified for external standalone components."
+]
